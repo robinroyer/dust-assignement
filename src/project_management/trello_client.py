@@ -5,14 +5,14 @@ Authentication uses three environment variables:
   TRELLO_API_SECRET — from the same page
   TRELLO_TOKEN      — OAuth token (run `python -m trello oauth` to generate one)
 
-CLI usage:
-  python trello_client.py list-boards
-  python trello_client.py get-board <board_id>
-  python trello_client.py get-lists <board_id>
-  python trello_client.py get-cards <list_id>
-  python trello_client.py get-card <card_id>
-  python trello_client.py move-card <card_id> <target_list_id>
-  python trello_client.py update-card <card_id> [--name NAME] [--description DESC] [--due YYYY-MM-DD] [--closed]
+CLI usage (run from project root):
+  python -m project_management.trello_client list-boards
+  python -m project_management.trello_client get-board <board_id>
+  python -m project_management.trello_client get-lists <board_id>
+  python -m project_management.trello_client get-cards <list_id>
+  python -m project_management.trello_client get-card <card_id>
+  python -m project_management.trello_client move-card <card_id> <target_list_id>
+  python -m project_management.trello_client update-card <card_id> [--name NAME] [--description DESC] [--due YYYY-MM-DD] [--closed]
 """
 
 import argparse
@@ -24,27 +24,18 @@ from typing import List, Optional
 
 from trello import TrelloClient
 
-try:
-    from .abstract import ProjectManagementTool
-    from .models import Board, BoardList, Card
-except ImportError:
-    from abstract import ProjectManagementTool
-    from models import Board, BoardList, Card
+from .abstract import ProjectManagementTool
+from .models import Board, BoardList, Card
 
 
 class TrelloProjectManagementTool(ProjectManagementTool):
     """Trello-backed implementation using the py-trello library."""
 
     def __init__(self, api_key: str, api_secret: str, token: str) -> None:
-        self._client = TrelloClient(
-            api_key=api_key,
-            api_secret=api_secret,
-            token=token,
-        )
+        self._client = TrelloClient(api_key=api_key, api_secret=api_secret, token=token)
 
     @classmethod
     def from_env(cls) -> "TrelloProjectManagementTool":
-        """Instantiate from TRELLO_API_KEY, TRELLO_API_SECRET, TRELLO_TOKEN env vars."""
         missing = [v for v in ("TRELLO_API_KEY", "TRELLO_API_SECRET", "TRELLO_TOKEN") if not os.getenv(v)]
         if missing:
             raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
@@ -103,7 +94,7 @@ class TrelloProjectManagementTool(ProjectManagementTool):
         return self._map_card(card)
 
     # ------------------------------------------------------------------
-    # Private mappers: py-trello objects → our dataclasses
+    # Private mappers
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -127,9 +118,7 @@ class TrelloProjectManagementTool(ProjectManagementTool):
 
     @staticmethod
     def _map_card(c) -> Card:
-        labels = []
-        if getattr(c, "labels", None):
-            labels = [lbl.name for lbl in c.labels if lbl.name]
+        labels = [lbl.name for lbl in (getattr(c, "labels", None) or []) if lbl.name]
         return Card(
             id=c.id,
             name=c.name,
@@ -149,7 +138,6 @@ class TrelloProjectManagementTool(ProjectManagementTool):
 # ---------------------------------------------------------------------------
 
 def _to_dict(obj) -> dict:
-    """Serialize a dataclass to a JSON-safe dict."""
     d = obj.__dict__.copy()
     if d.get("due") and isinstance(d["due"], datetime):
         d["due"] = d["due"].isoformat()
@@ -164,35 +152,32 @@ def _print_json(data) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="trello_client",
-        description="CLI for the Trello ProjectManagementTool",
-    )
+    parser = argparse.ArgumentParser(prog="project_management.trello_client", description="CLI for the Trello ProjectManagementTool")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list-boards", help="List all boards")
+    sub.add_parser("list-boards")
 
-    p = sub.add_parser("get-board", help="Get a board by ID")
+    p = sub.add_parser("get-board")
     p.add_argument("board_id")
 
-    p = sub.add_parser("get-lists", help="Get lists on a board")
+    p = sub.add_parser("get-lists")
     p.add_argument("board_id")
 
-    p = sub.add_parser("get-cards", help="Get cards in a list")
+    p = sub.add_parser("get-cards")
     p.add_argument("list_id")
 
-    p = sub.add_parser("get-card", help="Get full details of a card")
+    p = sub.add_parser("get-card")
     p.add_argument("card_id")
 
-    p = sub.add_parser("move-card", help="Move a card to another list")
+    p = sub.add_parser("move-card")
     p.add_argument("card_id")
     p.add_argument("target_list_id")
 
-    p = sub.add_parser("update-card", help="Update fields on a card")
+    p = sub.add_parser("update-card")
     p.add_argument("card_id")
     p.add_argument("--name", default=None)
     p.add_argument("--description", default=None)
-    p.add_argument("--due", default=None, metavar="YYYY-MM-DD", help="Due date in YYYY-MM-DD format")
+    p.add_argument("--due", default=None, metavar="YYYY-MM-DD")
     p.add_argument("--closed", action="store_true", default=None)
 
     return parser
@@ -211,37 +196,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     try:
         if args.command == "list-boards":
             _print_json(client.list_boards())
-
         elif args.command == "get-board":
             _print_json(client.get_board(args.board_id))
-
         elif args.command == "get-lists":
             _print_json(client.get_lists(args.board_id))
-
         elif args.command == "get-cards":
             _print_json(client.get_cards(args.list_id))
-
         elif args.command == "get-card":
             _print_json(client.get_card(args.card_id))
-
         elif args.command == "move-card":
             _print_json(client.move_card(args.card_id, args.target_list_id))
-
         elif args.command == "update-card":
             due = datetime.strptime(args.due, "%Y-%m-%d") if args.due else None
             closed = True if args.closed else None
-            _print_json(client.update_card(
-                args.card_id,
-                name=args.name,
-                description=args.description,
-                due=due,
-                closed=closed,
-            ))
-
-    except KeyError as exc:
-        print(f"Not found: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as exc:
+            _print_json(client.update_card(args.card_id, name=args.name, description=args.description, due=due, closed=closed))
+    except (KeyError, Exception) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 

@@ -1,33 +1,12 @@
-"""In-memory implementation of ProjectManagementTool.
-
-Intended for integration tests. All data lives in plain Python dicts and is
-lost when the object is garbage-collected.
-
-Usage in tests::
-
-    from in_memory import InMemoryProjectManagementTool
-
-    tool = InMemoryProjectManagementTool()
-    board = tool.seed_board("My Project")
-    todo  = tool.seed_list(board.id, "To Do")
-    done  = tool.seed_list(board.id, "Done")
-    card  = tool.seed_card(todo.id, board.id, "Task 1", description="First task")
-
-    tool.move_card(card.id, done.id)
-    assert tool.get_card(card.id).list_id == done.id
-"""
+"""In-memory implementation of ProjectManagementTool for integration tests."""
 
 import uuid
 from copy import deepcopy
 from datetime import datetime
 from typing import Dict, List, Optional
 
-try:
-    from .abstract import ProjectManagementTool
-    from .models import Board, BoardList, Card
-except ImportError:
-    from abstract import ProjectManagementTool
-    from models import Board, BoardList, Card
+from .abstract import ProjectManagementTool
+from .models import Board, BoardList, Card
 
 
 class InMemoryProjectManagementTool(ProjectManagementTool):
@@ -39,17 +18,15 @@ class InMemoryProjectManagementTool(ProjectManagementTool):
         self._cards: Dict[str, Card] = {}
 
     # ------------------------------------------------------------------
-    # Seed helpers — used by tests to pre-populate data
+    # Seed helpers
     # ------------------------------------------------------------------
 
     def seed_board(self, name: str, description: str = "") -> Board:
-        """Create and store a board, returning the new object."""
         board = Board(id=str(uuid.uuid4()), name=name, description=description)
         self._boards[board.id] = board
         return deepcopy(board)
 
     def seed_list(self, board_id: str, name: str, pos: float = 0.0) -> BoardList:
-        """Create and store a list on a board, returning the new object."""
         if board_id not in self._boards:
             raise KeyError(f"Board {board_id!r} not found")
         lst = BoardList(id=str(uuid.uuid4()), name=name, board_id=board_id, pos=pos)
@@ -66,7 +43,6 @@ class InMemoryProjectManagementTool(ProjectManagementTool):
         member_ids: Optional[List[str]] = None,
         due: Optional[datetime] = None,
     ) -> Card:
-        """Create and store a card in a list, returning the new object."""
         if list_id not in self._lists:
             raise KeyError(f"List {list_id!r} not found")
         card = Card(
@@ -97,10 +73,7 @@ class InMemoryProjectManagementTool(ProjectManagementTool):
     def get_lists(self, board_id: str) -> List[BoardList]:
         if board_id not in self._boards:
             raise KeyError(f"Board {board_id!r} not found")
-        results = [
-            lst for lst in self._lists.values()
-            if lst.board_id == board_id and not lst.closed
-        ]
+        results = [lst for lst in self._lists.values() if lst.board_id == board_id and not lst.closed]
         return [deepcopy(lst) for lst in sorted(results, key=lambda l: l.pos)]
 
     def get_cards(self, list_id: str) -> List[Card]:
