@@ -37,10 +37,10 @@ def test_returns_counts_for_found_board(pm):
     assert result["skipped"] == []
     assert len(result["boards"]) == 1
     b = result["boards"][0]
-    assert b["name"] == "Software Engineering"
-    assert b["description"] == "Eng team board"
-    assert b["list_count"] == 2
-    assert b["card_count"] == 3
+    assert b.name == "Software Engineering"
+    assert b.description == "Eng team board"
+    assert b.list_count == 2
+    assert b.card_count == 3
 
 
 def test_unknown_board_goes_to_skipped(pm):
@@ -58,7 +58,7 @@ def test_mix_of_found_and_skipped(pm):
     result = server_module.get_boards_summary(["Product", "Missing Board"])
 
     assert len(result["boards"]) == 1
-    assert result["boards"][0]["name"] == "Product"
+    assert result["boards"][0].name == "Product"
     assert result["skipped"] == ["Missing Board"]
 
 
@@ -69,8 +69,8 @@ def test_empty_board_has_zero_counts(pm):
 
     assert result["skipped"] == []
     b = result["boards"][0]
-    assert b["list_count"] == 0
-    assert b["card_count"] == 0
+    assert b.list_count == 0
+    assert b.card_count == 0
 
 
 def test_multiple_boards_aggregated_independently(pm):
@@ -85,8 +85,8 @@ def test_multiple_boards_aggregated_independently(pm):
 
     result = server_module.get_boards_summary(["Sales", "Engineering"])
 
-    by_name = {b["name"]: b for b in result["boards"]}
-    assert by_name["Sales"]["card_count"] == 1
-    assert by_name["Engineering"]["list_count"] == 1
-    assert by_name["Engineering"]["card_count"] == 2
+    by_name = {b.name: b for b in result["boards"]}
+    assert by_name["Sales"].card_count == 1
+    assert by_name["Engineering"].list_count == 1
+    assert by_name["Engineering"].card_count == 2
     assert result["skipped"] == []
