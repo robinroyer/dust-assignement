@@ -73,3 +73,10 @@ Or use environment variables directly:
 container = SyncContainer.from_env(space_id="sPxyz", ds_id="dsAbc")
 result = synchronize(["Engineering Backlog"], container)
 ```
+
+
+### running use case with container
+
+```
+docker run --env-file .env  synchronize-trello-to-dust:latest id1 datasourceId 'home-assignement-software-team'  'home-assignement-product-team' 'home-assignement-sales-team'
+```

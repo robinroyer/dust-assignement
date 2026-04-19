@@ -7,16 +7,17 @@ PIP := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install clean trello dust sync test
+.PHONY: help install clean trello dust sync test docker-build
 
 help:
 	@echo "Available targets:"
-	@echo "  install  Create virtual environment and install dependencies"
-	@echo "  clean    Remove the virtual environment"
-	@echo "  trello   Run the Trello client  (pass ARGS=\"<subcommand> [params]\")"
-	@echo "  dust     Run the Dust client    (pass ARGS=\"<subcommand> [params]\")"
-	@echo "  sync     Run the sync use case  (pass ARGS=\"<space_id> <ds_id> 'Board'\")"
-	@echo "  test     Run all integration tests"
+	@echo "  install       Create virtual environment and install dependencies"
+	@echo "  clean         Remove the virtual environment"
+	@echo "  trello        Run the Trello client  (pass ARGS=\"<subcommand> [params]\")"
+	@echo "  dust          Run the Dust client    (pass ARGS=\"<subcommand> [params]\")"
+	@echo "  sync          Run the sync use case  (pass ARGS=\"<space_id> <ds_id> 'Board'\")"
+	@echo "  test          Run all integration tests"
+	@echo "  docker-build  Build the synchronize-trello-to-dust Docker image"
 
 install:
 	@python3 -m venv $(VENV)
@@ -35,6 +36,9 @@ sync:
 
 test:
 	$(VENV)/bin/pytest test/ -v
+
+docker-build:
+	docker build -f build/Dockerfile -t synchronize-trello-to-dust .
 
 clean:
 	rm -rf $(VENV)
