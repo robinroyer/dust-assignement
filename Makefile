@@ -7,7 +7,10 @@ PIP := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install clean trello dust sync test docker-build
+DOCKER_USER ?= $(shell docker info 2>/dev/null | grep Username | awk '{print $$2}')
+IMAGE_TAG ?= latest
+
+.PHONY: help install clean trello dust sync test build-script build-mcp push-script push-mcp
 
 help:
 	@echo "Available targets:"
@@ -17,7 +20,10 @@ help:
 	@echo "  dust          Run the Dust client    (pass ARGS=\"<subcommand> [params]\")"
 	@echo "  sync          Run the sync use case  (pass ARGS=\"<space_id> <ds_id> 'Board'\")"
 	@echo "  test          Run all integration tests"
-	@echo "  docker-build  Build the synchronize-trello-to-dust Docker image"
+	@echo "  build-script  Build the synchronize-trello-to-dust Docker image"
+	@echo "  build-mcp     Build the MCP server Docker image"
+	@echo "  push-script   Tag and push synchronize-trello-to-dust to Docker Hub (IMAGE_TAG=<tag>)"
+	@echo "  push-mcp      Tag and push dust-sync-mcp to Docker Hub         (IMAGE_TAG=<tag>)"
 
 install:
 	@python3 -m venv $(VENV)
@@ -37,8 +43,19 @@ sync:
 test:
 	$(VENV)/bin/pytest test/ -v
 
-docker-build:
+build-script:
 	docker build -f build/Dockerfile -t synchronize-trello-to-dust .
+
+build-mcp:
+	docker build -f build/Dockerfile.mcp -t dust-sync-mcp .
+
+push-script: build-script
+	docker tag synchronize-trello-to-dust $(DOCKER_USER)/synchronize-trello-to-dust:$(IMAGE_TAG)
+	docker push $(DOCKER_USER)/synchronize-trello-to-dust:$(IMAGE_TAG)
+
+push-mcp: build-mcp
+	docker tag dust-sync-mcp $(DOCKER_USER)/dust-sync-mcp:$(IMAGE_TAG)
+	docker push $(DOCKER_USER)/dust-sync-mcp:$(IMAGE_TAG)
 
 clean:
 	rm -rf $(VENV)
