@@ -1,4 +1,4 @@
-"""MCP server exposing Trello project management tools via FastAPI + FastMCP.
+"""MCP server exposing Trello project management tools via FastMCP.
 
 Auth: static bearer token from MCP_AUTH_TOKEN env var, checked on every request.
 
@@ -12,15 +12,77 @@ Run locally:
 """
 
 import contextvars
+from dataclasses import dataclass
+from typing import List, Optional
 
-from fastapi import FastAPI
 from fastmcp import FastMCP
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .settings import MCP_AUTH_TOKEN
+from .settings import BOARD_PREFIX, MCP_AUTH_TOKEN
 from project_management.abstract import ProjectManagementTool
+from project_management.models import BoardWithCards, Card, ListWithCards
 from project_management.trello_client import TrelloProjectManagementTool
+
+
+@dataclass
+class CardResponse:
+    id: str
+    name: str
+    description: str
+    due: Optional[str]
+    labels: List[str]
+    member_ids: List[str]
+    url: str
+
+    @classmethod
+    def from_model(cls, card: Card) -> "CardResponse":
+        return cls(
+            id=card.id,
+            name=card.name,
+            description=card.description,
+            due=card.due.isoformat() if card.due else None,
+            labels=card.labels,
+            member_ids=card.member_ids,
+            url=card.url,
+        )
+
+
+@dataclass
+class ListResponse:
+    id: str
+    name: str
+    cards: List[CardResponse]
+
+    @classmethod
+    def from_model(cls, lst: ListWithCards) -> "ListResponse":
+        return cls(
+            id=lst.id,
+            name=lst.name,
+            cards=[CardResponse.from_model(c) for c in lst.cards],
+        )
+
+
+@dataclass
+class BoardResponse:
+    id: str
+    name: str
+    description: str
+    list_count: int
+    card_count: int
+    lists: List[ListResponse]
+
+    @classmethod
+    def from_model(cls, board: BoardWithCards) -> "BoardResponse":
+        lists = [ListResponse.from_model(lst) for lst in board.lists]
+        return cls(
+            id=board.id,
+            name=board.name,
+            description=board.description,
+            list_count=len(lists),
+            card_count=sum(len(lst.cards) for lst in lists),
+            lists=lists,
+        )
 
 _creds: contextvars.ContextVar[dict] = contextvars.ContextVar("_creds", default={})
 
@@ -67,6 +129,20 @@ def _get_pm() -> ProjectManagementTool:
 mcp = FastMCP("trello-pm")
 
 @mcp.tool()
+def get_available_boards() -> dict:
+    """Return board names accessible to the current user, filtered by BOARD_PREFIX env var.
+
+    Returns:
+        boards: list of matching board names.
+        prefix: the prefix filter that was applied (empty string means no filter).
+    """
+    pm = _get_pm()
+    boards = pm.list_boards()
+    names = [b.name for b in boards if b.name.startswith(BOARD_PREFIX)]
+    return {"boards": names, "prefix": BOARD_PREFIX}
+
+
+@mcp.tool()
 def get_boards_summary(board_names: list[str]) -> dict:
     """Return a summary of the requested Trello boards with list and card counts.
 
@@ -78,26 +154,8 @@ def get_boards_summary(board_names: list[str]) -> dict:
         card_count) and a skipped array for names that could not be matched.
     """
     pm = _get_pm()
-    by_name = {b.name: b for b in pm.list_boards()}
-    summary = []
-    skipped = []
-    for name in board_names:
-        board = by_name.get(name)
-        if board is None:
-            skipped.append(name)
-            continue
-        lists = pm.get_lists(board.id)
-        card_count = sum(len(pm.get_cards(lst.id)) for lst in lists)
-        summary.append({
-            "id": board.id,
-            "name": board.name,
-            "description": board.description,
-            "list_count": len(lists),
-            "card_count": card_count,
-        })
-    return {"boards": summary, "skipped": skipped}
+    found, skipped = pm.get_cards_by_board_names(board_names)
+    return {"boards": [BoardResponse.from_model(b) for b in found], "skipped": skipped}
 
 
-app = FastAPI(title="Trello MCP")
-app.add_middleware(_AuthMiddleware)
-app.mount("/", mcp.http_app())
+app = _AuthMiddleware(mcp.http_app())

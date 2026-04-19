@@ -32,3 +32,18 @@ class Card:
     member_ids: List[str] = field(default_factory=list)
     closed: bool = False
     url: str = ""
+
+
+@dataclass
+class ListWithCards:
+    id: str
+    name: str
+    cards: List[Card]
+
+
+@dataclass
+class BoardWithCards:
+    id: str
+    name: str
+    description: str
+    lists: List[ListWithCards]

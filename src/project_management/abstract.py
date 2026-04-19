@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional
 
-from .models import Board, BoardList, Card
+from .models import Board, BoardList, BoardWithCards, Card, ListWithCards
 
 
 class ProjectManagementTool(ABC):
@@ -43,3 +43,31 @@ class ProjectManagementTool(ABC):
         closed: Optional[bool] = None,
     ) -> Card:
         """Update one or more fields on a card and return the updated card."""
+
+    def get_cards_by_board_names(
+        self, board_names: List[str]
+    ) -> tuple[List[BoardWithCards], List[str]]:
+        """Return cards grouped by board then list, both sorted by name.
+
+        Returns (found_boards, skipped_names) where skipped_names contains
+        entries from board_names that did not match any accessible board.
+        """
+        by_name = {b.name: b for b in self.list_boards()}
+        found: List[BoardWithCards] = []
+        skipped: List[str] = []
+        for name in sorted(board_names):
+            board = by_name.get(name)
+            if board is None:
+                skipped.append(name)
+                continue
+            lists = sorted(self.get_lists(board.id), key=lambda l: l.name)
+            found.append(BoardWithCards(
+                id=board.id,
+                name=board.name,
+                description=board.description,
+                lists=[
+                    ListWithCards(id=lst.id, name=lst.name, cards=self.get_cards(lst.id))
+                    for lst in lists
+                ],
+            ))
+        return found, skipped

@@ -9,3 +9,4 @@ def _require(name: str) -> str:
 
 
 MCP_AUTH_TOKEN: str = _require("MCP_AUTH_TOKEN")
+BOARD_PREFIX: str = os.environ.get("BOARD_PREFIX", "")
