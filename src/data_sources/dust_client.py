@@ -219,13 +219,12 @@ class DustDataSourcesClient(AbstractDataSource):
 
     @staticmethod
     def _serialize_section(section: Section) -> Dict[str, Any]:
-        d: Dict[str, Any] = {}
+        d: Dict[str, Any] = {
+            "content": section.content if section.content is not None else "",
+            "sections": [DustDataSourcesClient._serialize_section(s) for s in section.sections],
+        }
         if section.prefix is not None:
             d["prefix"] = section.prefix
-        if section.content is not None:
-            d["content"] = section.content
-        if section.sections:
-            d["sections"] = [DustDataSourcesClient._serialize_section(s) for s in section.sections]
         return d
 
 

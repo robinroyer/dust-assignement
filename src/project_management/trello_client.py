@@ -111,7 +111,7 @@ class TrelloProjectManagementTool(ProjectManagementTool):
         return BoardList(
             id=lst.id,
             name=lst.name,
-            board_id=lst.board_id,
+            board_id=lst.board.id,
             pos=float(getattr(lst, "pos", 0) or 0),
             closed=getattr(lst, "closed", False),
         )

@@ -1,4 +1,10 @@
-"""Synchronize Trello boards to a Dust data source.
+"""Synchronize Trello boards to Dust — one data source per board per week.
+
+Creates (or reuses) a Dust data source named ``{team}-{year}-W{week}``
+(e.g. ``software-2026-W16``) and upserts a single document with the same ID
+containing the full board snapshot as nested sections (board → lists → cards).
+
+Successive runs for the same week are idempotent.
 
 Library usage::
 
@@ -6,13 +12,14 @@ Library usage::
     container.config.from_dict({
         "trello_api_key": "...", "trello_api_secret": "...", "trello_token": "...",
         "dust_api_key": "...", "dust_workspace_id": "...",
-        "space_id": "your-space-id", "ds_id": "your-ds-id",
+        "space_id": "your-space-id",
     })
-    result = synchronize(["Board Name 1", "Board Name 2"], container)
+    result = synchronize_weekly(["Board Name 1", "Board Name 2"], container)
 
 Script usage (from project root)::
 
     PYTHONPATH=src python -m use_cases.synchronize_trello_to_dust <space_id> <ds_id> "Board 1" ["Board 2" ...]
+    PYTHONPATH=src python -m use_cases.synchronize_trello_to_dust <space_id> <ds_id> --week 2026-W16 "Board 1"
 """
 
 import argparse
@@ -20,7 +27,8 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import List
+from datetime import date
+from typing import List, Optional, Tuple
 
 from dependency_injector import containers, providers
 
@@ -38,9 +46,8 @@ from project_management.trello_client import TrelloProjectManagementTool
 
 
 class SyncContainer(containers.DeclarativeContainer):
-    """Dependency-injector container for the synchronize use case.
+    """Dependency-injector container for the weekly sync use case.
 
-    Default providers wire up the real Trello and Dust clients.
     Override individual providers in tests to inject in-memory doubles::
 
         container = SyncContainer()
@@ -96,21 +103,40 @@ class SyncContainer(containers.DeclarativeContainer):
 
 
 @dataclass
-class SyncResult:
+class WeeklySyncResult:
+    week_label: str
     synced: int
     skipped_boards: List[str] = field(default_factory=list)
-    document_ids: List[str] = field(default_factory=list)
+    data_source_names: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
 
+_TEAM_TYPES = ("product", "sales", "software")
 
-def _card_to_section(card: Card, board: Board, lst: BoardList) -> Section:
-    details = "\n".join([
-        f"Board: {board.name}",
-        f"List: {lst.name}",
+
+def _get_team(board_name: str) -> str:
+    lower = board_name.lower()
+    for team in _TEAM_TYPES:
+        if team in lower:
+            return team
+    return "undefined"
+
+
+def _current_week_label() -> str:
+    cal = date.today().isocalendar()
+    return f"{cal[0]}-W{cal[1]:02d}"
+
+
+def _weekly_doc_id(board_name: str, week_label: str) -> str:
+    return f"{_get_team(board_name)}-{week_label}"
+
+
+
+def _card_to_section(card: Card) -> Section:
+    content = "\n".join([
         f"Card ID: {card.id}",
         f"Description: {card.description or '(none)'}",
         f"Labels: {', '.join(card.labels) if card.labels else '(none)'}",
@@ -118,25 +144,57 @@ def _card_to_section(card: Card, board: Board, lst: BoardList) -> Section:
         f"Due: {card.due.isoformat() if card.due else '(none)'}",
         f"URL: {card.url or '(none)'}",
     ])
+    return Section(prefix=f"### {card.name}", content=content)
+
+
+def _build_board_snapshot(
+    board: Board,
+    lists_with_cards: List[Tuple[BoardList, List[Card]]],
+    week_label: str,
+    team: str,
+) -> Section:
+    list_names = ", ".join(lst.name for lst, _ in lists_with_cards) or "(none)"
+    board_context = "\n".join([
+        f"Week: {week_label}",
+        f"Team: {team}",
+        f"Description: {board.description or '(none)'}",
+        f"Lists: {list_names}",
+    ])
     return Section(
-        prefix=f"# {card.name}",
-        sections=[Section(prefix="## Details", content=details)],
+        prefix=f"# {board.name}",
+        content=board_context,
+        sections=[
+            Section(
+                prefix=f"## {lst.name}",
+                sections=[_card_to_section(card) for card in cards],
+            )
+            for lst, cards in lists_with_cards
+        ],
     )
 
 
-def synchronize(board_names: List[str], container: SyncContainer) -> SyncResult:
-    """Synchronize all open cards from the named boards to the Dust data source.
+def synchronize_weekly(
+    board_names: List[str],
+    container: SyncContainer,
+    week_label: Optional[str] = None,
+) -> WeeklySyncResult:
+    """Synchronize named boards to per-board, per-week Dust data sources.
 
-    Each card is upserted as a document using ``trello-{card_id}`` as the
-    document ID, making successive runs idempotent.
+    For each board, creates (or reuses) a data source named ``{team}-{week_label}``
+    and upserts a single document with the same ID containing the full board
+    snapshot as nested sections (board → lists → cards).
 
     Args:
         board_names: Names of the Trello boards to sync.
         container: Dependency-injector container providing clients and config.
+        week_label: ISO week string like ``2026-W16``. Defaults to current week.
 
     Returns:
-        SyncResult with counts and IDs of the synced documents.
+        WeeklySyncResult with the week label, counts, and data source names.
     """
+    if week_label is None:
+        week_label = _current_week_label()
+
     pm: ProjectManagementTool = container.project_management()
     ds: AbstractDataSource = container.data_source()
     space_id: str = container.config.space_id()
@@ -152,23 +210,32 @@ def synchronize(board_names: List[str], container: SyncContainer) -> SyncResult:
         else:
             skipped.append(name)
 
-    document_ids: List[str] = []
+    ds_names: List[str] = []
     for board in found:
-        for lst in pm.get_lists(board.id):
-            for card in pm.get_cards(lst.id):
-                doc_id = f"trello-{card.id}"
-                ds.upsert_document(
-                    space_id,
-                    ds_id,
-                    doc_id,
-                    section=_card_to_section(card, board, lst),
-                    title=card.name,
-                    source_url=card.url or None,
-                    tags=list(card.labels),
-                )
-                document_ids.append(doc_id)
+        team = _get_team(board.name)
+        doc_id = _weekly_doc_id(board.name, week_label)
 
-    return SyncResult(synced=len(document_ids), skipped_boards=skipped, document_ids=document_ids)
+        lists_with_cards: List[Tuple[BoardList, List[Card]]] = [
+            (lst, pm.get_cards(lst.id))
+            for lst in pm.get_lists(board.id)
+        ]
+
+        ds.upsert_document(
+            space_id,
+            ds_id,
+            doc_id,
+            section=_build_board_snapshot(board, lists_with_cards, week_label, team),
+            title=f"{team} — {week_label}",
+            tags=[team, week_label],
+        )
+        ds_names.append(doc_id)
+
+    return WeeklySyncResult(
+        week_label=week_label,
+        synced=len(ds_names),
+        skipped_boards=skipped,
+        data_source_names=ds_names,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -179,10 +246,16 @@ def synchronize(board_names: List[str], container: SyncContainer) -> SyncResult:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="use_cases.synchronize_trello_to_dust",
-        description="Synchronize Trello boards to a Dust data source.",
+        description="Synchronize Trello boards to per-board, per-week Dust data sources.",
     )
     parser.add_argument("space_id", help="Dust space ID")
     parser.add_argument("ds_id", help="Dust data source ID")
+    parser.add_argument(
+        "--week",
+        default=None,
+        metavar="WEEK",
+        help="ISO week label (e.g. 2026-W16). Defaults to the current week.",
+    )
     parser.add_argument("boards", nargs="+", metavar="BOARD", help="Trello board names to sync")
     return parser
 
@@ -197,11 +270,12 @@ def main(argv: List[str] = None) -> None:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    result = synchronize(args.boards, container)
+    result = synchronize_weekly(args.boards, container, week_label=args.week)
     print(json.dumps({
+        "week_label": result.week_label,
         "synced": result.synced,
         "skipped_boards": result.skipped_boards,
-        "document_ids": result.document_ids,
+        "data_source_names": result.data_source_names,
     }, indent=2))
 
 
