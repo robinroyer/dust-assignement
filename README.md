@@ -3,6 +3,8 @@
 
 Allow using Dust agent on trello board data:
 
+> Briefing reads your team boards across Engineering, Product, Sales, and more, then distills the week's progress, blockers, and milestones into a single executive briefing. It filters out internal jargon and tool-specific noise, surfacing only what a CEO or board member needs to know in under 3 minutes.
+
 ![Dust agent briefing demo](dust-agent-briefing.gif)
 
 ## Choosing an integration approach
