@@ -1,130 +1,60 @@
-# dust-assignement
+# dust-assignement : Trello to Dust synchronization for agent use case
 
 
-### install deps
+Allow using Dust agent on trello board data:
 
-```
-make install
-```
+![Dust agent briefing demo](dust-agent-briefing.gif)
 
-### Testing Trello integration
+## Choosing an integration approach
 
-Add TRELLO_API_KEY, TRELLO_API_SECRET and TRELLO_TOKEN to .env file
+Two architectures are available to connect Trello and Dust. Pick the one that fits your use case:
+
+| | **Sync script** (push) | **MCP server** (pull) |
+|---|---|---|
+| **How it works** | Runs on a schedule; pushes Trello board snapshots into Dust data sources as documents | Dust agent calls the MCP server at query time; the server fetches live data from Trello |
+| **Data flow direction** | Push — your infra → Dust | Pull — Dust agent → your MCP server → Trello |
+| **Trello credentials exposure** | Stay entirely on your infra; never sent to Dust | Sent by the Dust agent as HTTP headers on every request |
+| **Data freshness** | Depends on sync frequency (hourly, daily, weekly…) | Always real-time — data is fetched at the moment the agent asks |
+| **Token consumption** | Low — Dust indexes documents and retrieves only relevant chunks via RAG | Higher — full board data is injected into the agent's context window |
+| **Persistent document / audit trail** | Yes — each sync upserts a versioned document in Dust; past snapshots can be queried later | No — data is ephemeral, lives only in the current context window |
+| **Agent run decoupled from Trello availability** | Yes — agent queries Dust even if Trello is down or slow | No — a Trello outage or rate-limit failure blocks the agent |
+| **Scales to large boards** | Well — chunking and embedding happen offline, before the agent runs | Less well — entire board content must fit in the context window |
+| **Operational cost** | A cron job or scheduled Docker container | An always-on HTTP server (e.g. Fly.io) |
+| **Best for** | Weekly reports, historical trend analysis, background knowledge bases, offline RAG | Real-time board inspection, taking actions on cards, ad-hoc queries where staleness is unacceptable |
 
 
-```
-make trello ARGS="list-boards"
-```
+---
 
+### Deploying Script solution
 
-### Synchronize trello to dust datasources
+The sync script is a one-shot Docker container — run it on a schedule (cron, CI, or any scheduler).
 
-Add `DUST_API_KEY` and `DUST_WORKSPACE_ID` to your `.env` file alongside the Trello credentials.
-
-**CLI (via make)**
+**1. Build the image**
 
 ```bash
-make sync ARGS="<space_id> <ds_id> 'Board Name'"
+make build-script
 ```
 
-Example — sync two boards into space `sPxyz` / data source `dsAbc`:
-
-```bash
-make sync ARGS="sPxyz dsAbc 'Engineering Backlog' 'Sprint 42'"
-```
-
-The command prints a JSON summary on completion:
-
-```json
-{
-  "synced": 12,
-  "skipped_boards": [],
-  "document_ids": [
-    "trello-abc123",
-    "trello-def456",
-    "..."
-  ]
-}
-```
-
-**Python library**
-
-```python
-from use_cases.synchronize_trello_to_dust import SyncContainer, synchronize
-
-container = SyncContainer()
-container.config.from_dict({
-    "trello_api_key": "YOUR_TRELLO_API_KEY",
-    "trello_api_secret": "YOUR_TRELLO_API_SECRET",
-    "trello_token": "YOUR_TRELLO_TOKEN",
-    "dust_api_key": "YOUR_DUST_API_KEY",
-    "dust_workspace_id": "YOUR_DUST_WORKSPACE_ID",
-    "space_id": "sPxyz",
-    "ds_id": "dsAbc",
-})
-
-result = synchronize(["Engineering Backlog", "Sprint 42"], container)
-print(f"Synced {result.synced} cards, skipped boards: {result.skipped_boards}")
-```
-
-Or use environment variables directly:
-
-```python
-container = SyncContainer.from_env(space_id="sPxyz", ds_id="dsAbc")
-result = synchronize(["Engineering Backlog"], container)
-```
-
-
-### Running the sync script with Docker
-
-Build and run locally:
+**2. Run locally**
 
 ```bash
 docker run --env-file .env synchronize-trello-to-dust:latest \
   <space_id> <ds_id> 'Board One' 'Board Two'
 ```
 
----
-
-### Deploying to Docker Hub
-
-Both images follow the same pattern. Set your Docker Hub username before pushing:
+**3. Publish to Docker Hub and run from anywhere**
 
 ```bash
 export DOCKER_USER=yourdockerhubusername
-```
+make push-script                   # tag: latest
+make push-script IMAGE_TAG=1.0.0   # custom tag
 
-**Sync script image**
-
-```bash
-make push-script                      # tag: latest
-make push-script IMAGE_TAG=1.0.0      # custom tag
-```
-
-This builds `synchronize-trello-to-dust` locally then pushes it as `$DOCKER_USER/synchronize-trello-to-dust:<tag>`.
-
-**MCP server image**
-
-```bash
-make push-mcp                         # tag: latest
-make push-mcp IMAGE_TAG=1.0.0         # custom tag
-```
-
-This builds `dust-sync-mcp` locally then pushes it as `$DOCKER_USER/dust-sync-mcp:<tag>`.
-
----
-
-### Using the published images
-
-**Sync script** — pull and run directly from Docker Hub:
-
-```bash
 docker run --env-file .env \
   yourdockerhubusername/synchronize-trello-to-dust:latest \
   <space_id> <ds_id> 'Board One' 'Board Two'
 ```
 
-Required env vars (in `.env` or passed via `-e`):
+Required env vars:
 
 | Variable | Description |
 |---|---|
@@ -134,15 +64,77 @@ Required env vars (in `.env` or passed via `-e`):
 | `DUST_API_KEY` | Dust API key |
 | `DUST_WORKSPACE_ID` | Dust workspace ID |
 
-**MCP server** — pull and start the HTTP server:
+**4. Schedule it (example: system cron)**
+
+```cron
+0 * * * *  docker run --env-file /path/to/.env \
+  yourdockerhubusername/synchronize-trello-to-dust:latest \
+  sPxyz dsAbc 'Engineering Backlog'
+```
+
+
+### Deploying MCP solution
+
+The MCP server is a long-running HTTP server. The recommended host is [Fly.io](https://fly.io) — a `fly.toml` is already included.
+
+**1. Build the image**
 
 ```bash
+make build-mcp
+```
+
+**2. Run locally**
+
+```bash
+docker run -p 8080:8080 \
+  -e MCP_AUTH_TOKEN=your-secret-token \
+  dust-sync-mcp:latest
+```
+
+The server listens on `http://localhost:8080`. Trello credentials are passed per-request via HTTP headers (see table below).
+
+**3. Deploy to Fly.io**
+
+```bash
+# Install the Fly CLI if needed: https://fly.io/docs/hands-on/install-flyctl/
+fly auth login
+
+# First deploy — creates the app defined in fly.toml (app = 'dust-assignement', region = cdg)
+fly launch --no-deploy
+
+# Set the auth token secret
+fly secrets set MCP_AUTH_TOKEN=your-secret-token
+
+# Deploy
+fly deploy
+```
+
+Subsequent deployments:
+
+```bash
+fly deploy
+```
+
+Check status and logs:
+
+```bash
+fly status
+fly logs
+```
+
+**4. Publish to Docker Hub (optional, for self-hosted)**
+
+```bash
+export DOCKER_USER=yourdockerhubusername
+make push-mcp                   # tag: latest
+make push-mcp IMAGE_TAG=1.0.0   # custom tag
+
 docker run -p 8080:8080 \
   -e MCP_AUTH_TOKEN=your-secret-token \
   yourdockerhubusername/dust-sync-mcp:latest
 ```
 
-The server listens on port `8080`. Trello credentials are **not** stored server-side — pass them per-request via HTTP headers:
+**Per-request headers expected by the server:**
 
 | Header | Description |
 |---|---|
@@ -150,3 +142,49 @@ The server listens on port `8080`. Trello credentials are **not** stored server-
 | `X-Trello-Api-Key` | Trello API key |
 | `X-Trello-Api-Secret` | Trello API secret |
 | `X-Trello-Token` | Trello OAuth token |
+
+
+## Development
+
+**Install dependencies**
+
+```bash
+make install        # creates .venv and installs requirements.txt
+source .venv/bin/activate
+```
+
+**Run tests**
+
+```bash
+make test
+```
+
+Tests use in-memory fakes for both Trello and Dust — no real credentials needed.
+
+**Project layout**
+
+```
+src/
+├── project_management/   # Trello abstraction
+│   ├── abstract.py       # ProjectManagementTool interface
+│   ├── trello_client.py  # Trello API implementation
+│   └── in_memory.py      # In-memory fake (used in tests)
+├── data_sources/         # Dust abstraction
+│   ├── abstract.py       # DataSourceTool interface
+│   ├── dust_client.py    # Dust API implementation
+│   └── in_memory.py      # In-memory fake (used in tests)
+├── use_cases/
+│   └── synchronize_trello_to_dust.py   # sync script entry point
+└── mcp_servers/
+    └── server.py         # MCP HTTP server entry point
+
+test/
+├── use_cases/            # sync script tests
+└── mcp_servers/          # MCP server tests
+
+build/
+├── Dockerfile            # sync script image
+└── Dockerfile.mcp        # MCP server image
+```
+
+The two implementations (`trello_client` / `dust_client`) depend only on their abstract interfaces, so they can be swapped or faked independently in tests.
